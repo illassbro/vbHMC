@@ -1,0 +1,190 @@
+
+' vbHMC.vbs
+On Error resume next 
+Dim RE, Line
+Dim ObjExec
+Dim objRE
+Dim strFromProc
+Dim rVal
+
+'[[SERVER LIST]]
+Dim SRV(2)
+SRV(0)="Yourhmc1"
+SRV(1)="Yourhmc2"
+SRV(2)="Yourhmc3"
+
+'[[HMC USERNAME]]
+Dim UID
+UID="hscroot"
+
+'[[HMC PASSWORD]]
+Dim PWD 
+PWD="abc123"
+
+
+PCRE = "root@"
+Set objRE = New RegExp
+With objRE
+    .Pattern    = PCRE
+    .IgnoreCase = True
+    .Global     = False
+End With
+
+T = "^TERM:"
+Set objRE_term = New RegExp
+With objRE_term
+    .Pattern    = T
+    .IgnoreCase = True
+    .Global     = False
+End With
+
+'FLPAR = LP
+Set objRE_FLPAR = New RegExp
+With objRE_FLPAR
+    .Pattern    = "Server-"
+    .IgnoreCase = True
+    .Global     = False
+End With
+
+
+Do While True
+
+'[[ LIST LPARS ]]
+Wscript.Echo "======================================================================================================================="
+Wscript.Echo "LPAR LIST"
+Wscript.Echo "======================================================================================================================="
+For Each lhmc In SRV
+Wscript.Echo lhmc
+Set objShell = WScript.CreateObject("WScript.Shell")
+Set ObjExec = objShell.Exec("plink -pw " & PWD &" "& UID & "@" & lhmc) 'LOGIN TO HMC AS "hscroot"
+Dim LARR(0)
+LARR(0) = "for sys in `lssyscfg -r sys -F name`; do lssyscfg -r lpar -m ${sys} -F name,logical_serial_num,state; done"
+For Each lcmd In LARR
+do
+good = good & ObjExec.StdOut.Read(1)
+If objRE.Test( good ) Then ObjExec.StdIn.WriteLine lcmd
+If objRE.Test( good ) Then Exit DO
+Loop While Not ObjExec.Stdout.atEndOfStream
+do
+Prompt = Prompt & ObjExec.StdOut.Read(1)
+'If objRE.Test( Prompt ) Then Wscript.Echo Prompt
+If objRE.Test( Prompt ) Then Exit DO
+Loop While Not ObjExec.Stdout.atEndOfStream
+'
+out = Replace(Prompt, "hscroot@", "#")
+Prompt=out
+out = Replace(Prompt, "hmc1:~>", "#")
+Prompt=out
+'
+pattern = " .*"
+replacement = " "
+Set rgx = New RegExp
+With rgx
+    .Pattern    = pattern
+    .IgnoreCase = True
+    .Global     = True
+End With
+result = rgx.Replace(out, replacement)
+out=result
+'
+pattern = "#.*"
+replacement = " "
+Set rgx = New RegExp
+With rgx
+    .Pattern    = pattern
+    .IgnoreCase = True
+    .Global     = True
+End With
+result = rgx.Replace(out, replacement)
+out=result
+Wscript.Echo result 
+Prompt = " "
+good = " "
+Next
+Next
+
+Wscript.Echo "======================================================================================================================="
+
+'[PROMPT USER]
+WScript.StdOut.Write("Enter LPAR NAME> ")
+LP = WScript.StdIn.ReadLine()
+FOUND = FALSE
+
+For Each hmc In SRV
+Wscript.Echo hmc
+FOUND = FALSE
+
+Set objShell = WScript.CreateObject("WScript.Shell")
+Set ObjExec = objShell.Exec("plink -pw " & PWD &" "& UID & "@" & lhmc) 'LOGIN TO HMC AS "hscroot"
+Wscript.Echo "EXE STATUS: " & ObjExec.status
+
+'[Setup vTERM on HMC]
+Dim ARR(8)
+ARR(0) = "LPAR=" & LP
+ARR(1) = "echo ${LPAR}"
+ARR(2) = "for sys in `lssyscfg -r sys -F name`; do lssyscfg -r lpar -m ${sys} -F name,logical_serial_num | grep -i ${LPAR} && LPARSN=`lssyscfg -r lpar -m ${sys} -F name,logical_serial_num | grep -i ${LPAR} | sed 's/.*,//;s/.$/#/;s/#//;s/.*/&/'`; done"
+ARR(3) = "echo ${LPARSN}"
+ARR(4) = "lssyscfg -r sys -F name | grep ${LPARSN}"
+ARR(5) = "NAME=`lssyscfg -r sys -F name | grep ${LPARSN}`;"
+ARR(6) = "TERM=`lssyscfg -r lpar -m ${NAME} -F name,lpar_id,state | grep -i ${LPAR} | sed 's/,/#/;s/.*#//;s/,/#/;s/#.*//'`"
+ARR(7) = "echo LPAR ${LPAR} on sytem ${NAME}: vterm $TERM"
+ARR(8) = "echo TERM: mkvterm -m ${NAME} --id ${TERM}"
+
+For Each cmd In ARR
+'Wscript.Echo "RUNNING THIS COMMAND LOOP: "&cmd
+
+do
+good = good & ObjExec.StdOut.Read(1)
+If objRE.Test( good ) Then ObjExec.StdIn.WriteLine cmd
+If objRE.Test( good ) Then Exit DO
+Loop While Not ObjExec.Stdout.atEndOfStream
+
+If objRE_FLPAR.test( good ) Then FOUND = TRUE
+
+do
+Prompt = Prompt & ObjExec.StdOut.Read(1)
+'If objRE.Test( Prompt ) Then Wscript.Echo Prompt
+If objRE.Test( Prompt ) Then Exit DO
+Loop While Not ObjExec.Stdout.atEndOfStream
+
+If objRE_FLPAR.test( Prompt ) Then FOUND = TRUE
+
+'[[[ EXTRACT TERM INFO ]]]
+If objRE_term.Test( Prompt ) Then Wscript.Echo "TERM LINE [OUT]: " & Prompt
+out = Replace(Prompt, "TERM:", "#")
+out2 = Replace(out, "${TERM}", "#")
+out = Replace(out2, "hscroot@", "#")
+
+pattern = ".*#"
+replacement = " "
+Set rgx = New RegExp
+With rgx
+    .Pattern    = pattern
+    .IgnoreCase = True
+    .Global     = True
+End With
+result = rgx.Replace(out, replacement)
+'Wscript.Echo "OUTPUT: " & result 
+
+Prompt = " "
+good = " "
+Next
+
+'[OPEN NEW TERM SETUP SESSION]
+Set objRE_FIND = New RegExp
+With objRE_FIND
+    .Pattern    = "TRUE"
+    .IgnoreCase = True
+    .Global     = False
+End With
+
+If objRE_FIND.test( FOUND ) Then Wscript.Echo "LPAR [" & LP & "] WAS FOUND ON [" & hmc & "]"
+If objRE_FIND.test( FOUND ) Then Set WshShell = WScript.CreateObject("WScript.Shell")
+'If objRE_FIND.test( FOUND ) Then WshShell.Run "putty -pw passw0rd hscroot@" & hmc
+If objRE_FIND.test( FOUND ) Then WshShell.Run "putty -pw "& PWD &" "& UID & "@" & hmc
+If objRE_FIND.test( FOUND ) Then Wscript.Sleep 1000
+If objRE_FIND.test( FOUND ) Then WshShell.AppActivate hmc
+If objRE_FIND.test( FOUND ) Then WshShell.SendKeys result
+next
+loop
+'EOF
